@@ -1,20 +1,19 @@
 // Firechat is a simple, easily-extensible data layer for multi-user,
-// multi-room chat, built entirely on [Firebase](https://firebase.com).
+// multi-room chat, built entirely on [Firebase](https://firebase.google.com).
 //
 // The Firechat object is the primary conduit for all underlying data events.
 // It exposes a number of methods for binding event listeners, creating,
 // entering, or leaving chat rooms, initiating chats, sending messages,
 // and moderator actions such as warning, kicking, or suspending users.
 //
-//     Firechat.js 0.0.0
-//     https://firebase.com
-//     (c) 2014 Firebase
+//     firechat.js 0.0.0
+//     https://firebase.google.com
+//     (c) 2016 Firebase
 //     License: MIT
 
 // Setup
 // --------------
-(function(Firebase) {
-
+(function() {
   // Establish a reference to the `window` object, and save the previous value
   // of the `Firechat` variable.
   var root = this,
@@ -23,7 +22,7 @@
   function Firechat(firebaseRef, options) {
 
     // Instantiate a new connection to Firebase.
-    this._firebase = firebaseRef;
+    this._firechatRef = firebaseRef;
 
     // User-specific instance variables.
     this._user = null;
@@ -45,12 +44,12 @@
 
     // Commonly-used Firebase references.
     this._userRef        = null;
-    this._messageRef     = this._firebase.database().ref().child('room-messages');
-    this._roomRef        = this._firebase.database().ref().child('room-metadata');
-    this._privateRoomRef = this._firebase.database().ref().child('room-private-metadata');
-    this._moderatorsRef  = this._firebase.database().ref().child('moderators');
-    this._suspensionsRef = this._firebase.database().ref().child('suspensions');
-    this._usersOnlineRef = this._firebase.database().ref().child('user-names-online');
+    this._messageRef     = this._firechatRef.child('room-messages');
+    this._roomRef        = this._firechatRef.child('room-metadata');
+    this._privateRoomRef = this._firechatRef.child('room-private-metadata');
+    this._moderatorsRef  = this._firechatRef.child('moderators');
+    this._suspensionsRef = this._firechatRef.child('suspensions');
+    this._usersOnlineRef = this._firechatRef.child('user-names-online');
 
     // Setup and establish default options.
     this._options = options || {};
@@ -97,12 +96,13 @@
     // Initialize Firebase listeners and callbacks for the supported bindings.
     _setupDataEvents: function() {
       // Monitor connection state so we can requeue disconnect operations if need be.
-      this.getRoot(this._firebase.database().ref()).child('.info/connected').on('value', function(snapshot) {
+      var connectedRef = _getRoot(this._firechatRef).child('.info/connected');
+      connectedRef.on('value', function(snapshot) {
         if (snapshot.val() === true) {
           // We're connected (or reconnected)! Set up our presence state.
           for (var i = 0; i < this._presenceBits; i++) {
             var op = this._presenceBits[i],
-                ref = this.getRoot(this._firebase.database().ref()).child(op.ref);
+                ref = _getRoot(this._firechatRef).child(op.ref);
 
             ref.onDisconnect().set(op.offlineValue);
             ref.set(op.onlineValue);
@@ -112,7 +112,7 @@
 
       // Generate a unique session id for the visit.
       var sessionRef = this._userRef.child('sessions').push();
-      this._sessionId = this.getKey(sessionRef);
+      this._sessionId = _getKey(sessionRef);
       this._queuePresenceOperation(sessionRef, true, null);
 
       // Register our username in the public user listing.
@@ -173,7 +173,7 @@
 
     // Remove an on-disconnect event from firing upon future disconnect and reconnect.
     _removePresenceOperation: function(path, value) {
-      var ref = new Firebase(path);
+      var ref = firebase.database.ref(path);
       ref.onDisconnect().cancel();
       ref.set(value);
       delete this._presenceBits[path];
@@ -196,11 +196,11 @@
     },
     _onNewMessage: function(roomId, snapshot) {
       var message = snapshot.val();
-      message.id = Firechat.prototype.getKey(snapshot);
+      message.id = _getKey(snapshot);
       this._invokeEventCallbacks('message-add', roomId, message);
     },
     _onRemoveMessage: function(roomId, snapshot) {
-      var messageId = Firechat.prototype.getKey(snapshot);
+      var messageId = _getKey(snapshot);
       this._invokeEventCallbacks('message-remove', roomId, messageId);
     },
     _onLeaveRoom: function(roomId) {
@@ -228,7 +228,7 @@
         return;
       }
 
-      invite.id = invite.id || self.getKey(snapshot);
+      invite.id = invite.id || _getKey(snapshot);
       self.getRoom(invite.roomId, function(room) {
         invite.toRoomName = room.name;
         self._invokeEventCallbacks('room-invite', invite);
@@ -238,7 +238,7 @@
       var self = this,
           invite = snapshot.val();
 
-      invite.id = invite.id || self.getKey(snapshot);
+      invite.id = invite.id || _getKey(snapshot);
       this._invokeEventCallbacks('room-invite-response', invite);
     }
   };
@@ -250,11 +250,11 @@
   Firechat.prototype.setUser = function(userId, userName, callback) {
     var self = this;
 
-    self._firebase.auth().onAuthStateChanged(function(authData) {
-      if (authData) {
+    self._firebaseRef.auth().onAuthStateChanged(function(user) {
+      if (user) {
         self._userId = userId.toString();
         self._userName = userName.toString();
-        self._userRef = self._firebase.database().ref().child('users').child(self._userId);
+        self._userRef = self._firebaseRef.child('users').child(self._userId);
         self._loadUserMetadata(function() {
           root.setTimeout(function() {
             callback(self._user);
@@ -287,17 +287,8 @@
     var self = this,
         newRoomRef = this._roomRef.push();
 
-
-    if (!self._user) {
-      self._onAuthRequired();
-      if (cb) {
-        cb(new Error('Not authenticated or user not set!'));
-      }
-      return;
-    }
-    
     var newRoom = {
-      id: self.getKey(newRoomRef),
+      id: _getKey(newRoomRef),
       name: roomName,
       type: roomType || 'public',
       createdByUserId: this._userId,
@@ -311,10 +302,10 @@
 
     newRoomRef.set(newRoom, function(error) {
       if (!error) {
-        self.enterRoom(self.getKey(newRoomRef));
+        self.enterRoom(_getKey(newRoomRef));
       }
       if (callback) {
-        callback(self.getKey(newRoomRef));
+        callback(_getKey(newRoomRef));
       }
     });
   };
@@ -343,7 +334,7 @@
         });
 
         // Set presence bit for the room and queue it for removal on disconnect.
-        var presenceRef = self._firebase.database().ref().child('room-users').child(roomId).child(self._userId).child(self._sessionId);
+        var presenceRef = self._firebaseRef.child('room-users').child(roomId).child(self._userId).child(self._sessionId);
         self._queuePresenceOperation(presenceRef, {
           id: self._userId,
           name: self._userName
@@ -372,7 +363,7 @@
   // Leave a chat room.
   Firechat.prototype.leaveRoom = function(roomId) {
     var self = this,
-        userRoomRef = self._firebase.database().ref().child('room-users').child(roomId);
+        userRoomRef = self._firebaseRef.child('room-users').child(roomId);
 
     // Remove listener for new messages to this room.
     self._messageRef.child(roomId).off();
@@ -444,7 +435,7 @@
   // Send a moderator notification to a specific user.
   Firechat.prototype.sendSuperuserNotification = function(userId, notificationType, data, cb) {
     var self = this,
-        userNotificationsRef = self._firebase.database().ref().child('users').child(userId).child('notifications');
+        userNotificationsRef = self._firebaseRef.child('users').child(userId).child('notifications');
 
     userNotificationsRef.push({
       fromUserId: self._userId,
@@ -482,9 +473,9 @@
   Firechat.prototype.inviteUser = function(userId, roomId) {
     var self = this,
         sendInvite = function() {
-          var inviteRef = self._firebase.database().ref().child('users').child(userId).child('invites').push();
+          var inviteRef = self._firebaseRef.database().ref().child('users').child(userId).child('invites').push();
           inviteRef.set({
-            id: self.getKey(inviteRef),
+            id: _getKey(inviteRef),
             fromUserId: self._userId,
             fromUserName: self._userName,
             roomId: roomId
@@ -551,7 +542,7 @@
   Firechat.prototype.getUsersByRoom = function() {
     var self = this,
         roomId = arguments[0],
-        query = self._firebase.database().ref().child('room-users').child(roomId),
+        query = self._firebaseRef.child('room-users').child(roomId),
         cb = arguments[arguments.length - 1],
         limit = null;
 
@@ -649,7 +640,7 @@
     }
   };
 
-  Firechat.prototype.getKey = function(snapshot) {
+  var _getKey = function(snapshot) {
     var key;
     if (typeof snapshot.key === 'function') {
       key = snapshot.key();
@@ -661,7 +652,7 @@
     return key;
   };
 
-  Firechat.prototype.getRef = function(snapshotOrRef) {
+  var _getRef = function(snapshotOrRef) {
     var ref;
     if (typeof snapshotOrRef.ref === 'function') {
       ref = snapshotOrRef.ref();
@@ -671,7 +662,7 @@
     return ref;
   };
 
-  Firechat.prototype.getRoot = function(snapshotOrRef) {
+  var _getRoot = function(snapshotOrRef) {
     var ref;
     if (typeof snapshotOrRef.root === 'function') {
       ref = snapshotOrRef.root();
@@ -680,4 +671,4 @@
     }
     return ref;
   };
-})(firebase);
+})();
